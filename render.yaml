@@ -1,0 +1,14 @@
+services:
+  - name: repo-agent-linear-bot
+    runtime: python
+    plan: free
+    dockerfilePath: Dockerfile
+    envVars:
+      - key: LINEAR_API_KEY
+        sync: false
+      - key: LINEAR_WEBHOOK_SECRET
+        sync: false
+      - key: RAG_BACKEND_URL
+        sync: false
+      - key: REPOS_JSON
+        sync: false
