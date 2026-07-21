@@ -16,8 +16,12 @@ load_dotenv(Path(__file__).resolve().parent / ".env")
 
 log = logging.getLogger(__name__)
 
-LINEAR_API_KEY = os.environ["LINEAR_API_KEY"]
-LINEAR_SIGNING_SECRET = os.environ["LINEAR_WEBHOOK_SECRET"]
+LINEAR_API_KEY = os.environ.get("LINEAR_API_KEY", "")
+LINEAR_SIGNING_SECRET = os.environ.get("LINEAR_WEBHOOK_SECRET", "")
+if not LINEAR_API_KEY:
+    log.warning("LINEAR_API_KEY not set — comments will fail")
+if not LINEAR_SIGNING_SECRET:
+    log.warning("LINEAR_WEBHOOK_SECRET not set — signature verification skipped")
 
 from repos import lookup_repo
 from rag_client import ask_rag
@@ -42,41 +46,57 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@app.get("/linear/webhook")
+async def webhook_get():
+    return {"ok": True, "message": "webhook endpoint is live"}
+
+
 @app.post("/linear/webhook")
 async def webhook(req: Request):
     body = await req.body()
     sig = req.headers.get("Linear-Signature", "")
+    log.info("Webhook received — sig=%s body_len=%d", sig[:16] if sig else "MISSING", len(body))
+
     expected = hmac.new(
         LINEAR_SIGNING_SECRET.encode(), body, hashlib.sha256
     ).hexdigest()
-    if not hmac.compare_digest(sig, expected):
+    if LINEAR_SIGNING_SECRET and not hmac.compare_digest(sig, expected):
+        log.warning("Signature mismatch — expected=%s got=%s", expected[:16], sig[:16] if sig else "MISSING")
         return {"ok": False}
 
     payload = await req.json()
+    log.info("Payload action=%s type=%s", payload.get("action"), payload.get("type"))
 
     if payload.get("action") != "create" or payload.get("type") != "Comment":
         return {"ok": True}
 
     comment = payload.get("data", {})
     text = comment.get("body", "")
+    log.info("Comment body=%s", text[:200])
+
     if "@repoagent" not in text.lower():
         return {"ok": True}
 
     m = re.match(r".*@repoagent\s+/(\S+)\s+(.*)", text, re.I | re.S)
     if not m:
+        log.info("No alias match for comment: %s", text[:200])
         return {"ok": True}
 
     alias, question = m.group(1), m.group(2)
+    log.info("Parsed alias=%s question=%s", alias, question[:100])
 
     repo = lookup_repo(alias)
     if not repo:
-        issue_id = comment.get("issueId")
+        issue_id = comment.get("issueId") or payload.get("data", {}).get("issueId")
+        log.warning("Unknown repo alias: %s", alias)
         if issue_id:
             await post_comment(issue_id, f"Unknown repo alias: `{alias}`")
         return {"ok": True}
 
-    issue_id = comment.get("issueId")
+    issue_id = comment.get("issueId") or payload.get("data", {}).get("issueId")
+    log.info("issue_id=%s", issue_id)
     if not issue_id:
+        log.error("No issueId found in payload: %s", payload)
         return {"ok": False}
 
     async def send(msg: str):
