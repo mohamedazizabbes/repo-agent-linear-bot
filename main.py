@@ -77,8 +77,10 @@ async def oauth_callback(code: str):
                 "grant_type": "authorization_code",
             },
         )
-        resp.raise_for_status()
         data = resp.json()
+        log.info("OAuth token exchange — status=%d body=%s", resp.status_code, data)
+        if resp.status_code != 200:
+            return {"ok": False, "error": data}
     token = data.get("access_token", "")
     log.info("OAuth token received — copy this into LINEAR_APP_ACCESS_TOKEN: %s", token[:16] if token else "EMPTY")
     return {"ok": True, "access_token": token, "instruction": "Copy this access_token into LINEAR_APP_ACCESS_TOKEN env var on Render, then redeploy."}
