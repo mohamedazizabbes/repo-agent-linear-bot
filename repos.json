@@ -3,6 +3,10 @@
     "url": "https://github.com/menacraft-team-trustcheck/reservi-backend-api",
     "qdrant_name": "reservi-backend-api"
   },
+  "reservi_backend_api": {
+    "url": "https://github.com/menacraft-team-trustcheck/reservi-backend-api",
+    "qdrant_name": "reservi-backend-api"
+  },
   "ask-agents": {
     "url": "https://github.com/menacraft-team-trustcheck/ask-agents",
     "qdrant_name": "ask-agents"
