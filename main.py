@@ -2,12 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-import json
 import logging
 import os
 import re
 from contextlib import asynccontextmanager
-from pathlib import Path
 
 import httpx
 from dotenv import load_dotenv
@@ -28,20 +26,9 @@ APP_ACCESS_TOKEN = os.environ.get("LINEAR_APP_ACCESS_TOKEN", "")
 # Fallback personal key (only used if no app token)
 FALLBACK_API_KEY = os.environ.get("LINEAR_API_KEY", "")
 
-TOKEN_FILE = Path(__file__).resolve().parent / ".linear_token.json"
-
 
 def _load_token() -> str:
-    if APP_ACCESS_TOKEN:
-        return APP_ACCESS_TOKEN
-    if TOKEN_FILE.exists():
-        data = json.loads(TOKEN_FILE.read_text())
-        return data.get("access_token", "")
-    return FALLBACK_API_KEY
-
-
-def _save_token(data: dict):
-    TOKEN_FILE.write_text(json.dumps(data))
+    return APP_ACCESS_TOKEN or FALLBACK_API_KEY
 
 
 if not LINEAR_CLIENT_ID:
@@ -91,9 +78,9 @@ async def oauth_callback(code: str):
         )
         resp.raise_for_status()
         data = resp.json()
-    _save_token(data)
-    log.info("OAuth token saved — token_type=%s", data.get("token_type"))
-    return {"ok": True, "token_type": data.get("token_type")}
+    token = data.get("access_token", "")
+    log.info("OAuth token received — copy this into LINEAR_APP_ACCESS_TOKEN: %s", token[:16] if token else "EMPTY")
+    return {"ok": True, "access_token": token, "instruction": "Copy this access_token into LINEAR_APP_ACCESS_TOKEN env var on Render, then redeploy."}
 
 
 @app.get("/linear/webhook")
