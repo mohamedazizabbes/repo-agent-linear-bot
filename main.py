@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import logging
 import os
 import re
@@ -16,12 +17,39 @@ load_dotenv(Path(__file__).resolve().parent / ".env")
 
 log = logging.getLogger(__name__)
 
-LINEAR_API_KEY = os.environ.get("LINEAR_API_KEY", "")
-LINEAR_SIGNING_SECRET = os.environ.get("LINEAR_WEBHOOK_SECRET", "")
-if not LINEAR_API_KEY:
-    log.warning("LINEAR_API_KEY not set — comments will fail")
-if not LINEAR_SIGNING_SECRET:
+LINEAR_WEBHOOK_SECRET = os.environ.get("LINEAR_WEBHOOK_SECRET", "")
+LINEAR_CLIENT_ID = os.environ.get("LINEAR_CLIENT_ID", "")
+LINEAR_CLIENT_SECRET = os.environ.get("LINEAR_CLIENT_SECRET", "")
+LINEAR_REDIRECT_URI = os.environ.get("LINEAR_REDIRECT_URI", "")
+
+# App-actor token — set after completing OAuth install once
+APP_ACCESS_TOKEN = os.environ.get("LINEAR_APP_ACCESS_TOKEN", "")
+
+# Fallback personal key (only used if no app token)
+FALLBACK_API_KEY = os.environ.get("LINEAR_API_KEY", "")
+
+TOKEN_FILE = Path(__file__).resolve().parent / ".linear_token.json"
+
+
+def _load_token() -> str:
+    if APP_ACCESS_TOKEN:
+        return APP_ACCESS_TOKEN
+    if TOKEN_FILE.exists():
+        data = json.loads(TOKEN_FILE.read_text())
+        return data.get("access_token", "")
+    return FALLBACK_API_KEY
+
+
+def _save_token(data: dict):
+    TOKEN_FILE.write_text(json.dumps(data))
+
+
+if not LINEAR_CLIENT_ID:
+    log.warning("LINEAR_CLIENT_ID not set")
+if not LINEAR_WEBHOOK_SECRET:
     log.warning("LINEAR_WEBHOOK_SECRET not set — signature verification skipped")
+if not _load_token():
+    log.warning("No access token available — comments will fail")
 
 from repos import lookup_repo
 from rag_client import ask_rag
@@ -46,6 +74,28 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@app.get("/callback")
+async def oauth_callback(code: str):
+    if not code:
+        return {"error": "missing code"}
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await client.post(
+            "https://api.linear.app/oauth/token",
+            json={
+                "client_id": LINEAR_CLIENT_ID,
+                "client_secret": LINEAR_CLIENT_SECRET,
+                "code": code,
+                "redirect_uri": LINEAR_REDIRECT_URI,
+                "grant_type": "authorization_code",
+            },
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    _save_token(data)
+    log.info("OAuth token saved — token_type=%s", data.get("token_type"))
+    return {"ok": True, "token_type": data.get("token_type")}
+
+
 @app.get("/linear/webhook")
 async def webhook_get():
     return {"ok": True, "message": "webhook endpoint is live"}
@@ -58,22 +108,39 @@ async def webhook(req: Request):
     log.info("Webhook received — sig=%s body_len=%d", sig[:16] if sig else "MISSING", len(body))
 
     expected = hmac.new(
-        LINEAR_SIGNING_SECRET.encode(), body, hashlib.sha256
+        LINEAR_WEBHOOK_SECRET.encode(), body, hashlib.sha256
     ).hexdigest()
-    if LINEAR_SIGNING_SECRET and not hmac.compare_digest(sig, expected):
-        log.warning("Signature mismatch — expected=%s got=%s", expected[:16], sig[:16] if sig else "MISSING")
+    if LINEAR_WEBHOOK_SECRET and not hmac.compare_digest(sig, expected):
+        log.warning("Signature mismatch")
         return {"ok": False}
 
     payload = await req.json()
-    log.info("Payload action=%s type=%s", payload.get("action"), payload.get("type"))
+    event_type = payload.get("type")
+    log.info("Payload type=%s action=%s", event_type, payload.get("action"))
 
-    if payload.get("action") != "create" or payload.get("type") != "Comment":
-        return {"ok": True}
+    # --- Agent session event (proper agent app) ---
+    if event_type == "AgentSessionEvent":
+        session = payload.get("agentSession", {})
+        comment = session.get("comment", {})
+        text = comment.get("body", "")
+        issue_id = session.get("issueId")
+        log.info("AgentSessionEvent — body=%s issueId=%s", text[:200], issue_id)
 
-    comment = payload.get("data", {})
-    text = comment.get("body", "")
-    log.info("Comment body=%s", text[:200])
+        return await _handle_comment(text, issue_id, payload)
 
+    # --- Fallback: plain Comment event (webhook-only mode) ---
+    if payload.get("action") == "create" and event_type == "Comment":
+        comment = payload.get("data", {})
+        text = comment.get("body", "")
+        issue_id = comment.get("issueId")
+        log.info("Comment event — body=%s issueId=%s", text[:200], issue_id)
+
+        return await _handle_comment(text, issue_id, payload)
+
+    return {"ok": True}
+
+
+async def _handle_comment(text: str, issue_id: str | None, payload: dict):
     if "@repoagent" not in text.lower():
         return {"ok": True}
 
@@ -87,14 +154,11 @@ async def webhook(req: Request):
 
     repo = lookup_repo(alias)
     if not repo:
-        issue_id = comment.get("issueId") or payload.get("data", {}).get("issueId")
         log.warning("Unknown repo alias: %s", alias)
         if issue_id:
             await post_comment(issue_id, f"Unknown repo alias: `{alias}`")
         return {"ok": True}
 
-    issue_id = comment.get("issueId") or payload.get("data", {}).get("issueId")
-    log.info("issue_id=%s", issue_id)
     if not issue_id:
         log.error("No issueId found in payload: %s", payload)
         return {"ok": False}
@@ -111,10 +175,11 @@ async def webhook(req: Request):
 
 
 async def post_comment(issue_id: str, body: str):
+    token = _load_token()
     async with httpx.AsyncClient(timeout=15) as client:
         resp = await client.post(
             "https://api.linear.app/graphql",
-            headers={"Authorization": LINEAR_API_KEY},
+            headers={"Authorization": token},
             json={
                 "query": """
                     mutation($issueId: String!, $body: String!) {
