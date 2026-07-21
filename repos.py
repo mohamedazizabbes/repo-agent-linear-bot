@@ -33,14 +33,14 @@ def _load() -> dict[str, dict]:
 
 
 def lookup_repo(alias: str) -> dict | None:
-    """Look up a repo by alias (case-insensitive).
+    """Look up a repo by alias (case-insensitive, underscores/hyphens interchangeable).
 
     Returns {"url": "...", "repo_name": "..."} or None.
     """
     repos = _load()
-    key = alias.lower().strip()
+    key = alias.lower().strip().replace("_", "-")
     for name, info in repos.items():
-        if name.lower() == key:
+        if name.lower().replace("_", "-") == key:
             return {"url": info["url"], "repo_name": info.get("qdrant_name", name)}
     return None
 
