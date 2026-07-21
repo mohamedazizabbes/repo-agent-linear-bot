@@ -1,10 +1,62 @@
 {
-  "reservi-backend-api": {
-    "url": "https://github.com/menacraft-team-trustcheck/reservi-backend-api",
-    "qdrant_name": "reservi-backend-api"
+  "agent-slack-bot": {
+    "url": "https://github.com/mohamedazizabbes/agent-slack-bot",
+    "qdrant_name": "agent-slack-bot"
+  },
+  "code-explainer": {
+    "url": "https://github.com/taheroo/code-explainer",
+    "qdrant_name": "code-explainer"
   },
   "ask-agents": {
-    "url": "https://github.com/menacraft-team-trustcheck/ask-agents",
+    "url": "https://github.com/taheroo/ask-agents",
     "qdrant_name": "ask-agents"
+  },
+  "reservi-backend-api": {
+    "url": "https://github.com/taheroo/reservi-backend-api",
+    "qdrant_name": "reservi-backend-api"
+  },
+  "CULPRIT_AINS": {
+    "url": "https://github.com/mohamedazizabbes/CULPRIT_AINS",
+    "qdrant_name": "CULPRIT_AINS"
+  },
+  "devpost_USAII": {
+    "url": "https://github.com/mohamedazizabbes/devpost_USAII",
+    "qdrant_name": "devpost_USAII"
+  },
+  "final_rag": {
+    "url": "https://github.com/mohamedazizabbes/final_rag",
+    "qdrant_name": "final_rag"
+  },
+  "rag_demo": {
+    "url": "https://github.com/mohamedazizabbes/rag_demo",
+    "qdrant_name": "rag_demo"
+  },
+  "4_repo_demo": {
+    "url": "https://github.com/mohamedazizabbes/4_repo_demo",
+    "qdrant_name": "4_repo_demo"
+  },
+  "WARCAST": {
+    "url": "https://github.com/mohamedazizabbes/WARCAST",
+    "qdrant_name": "WARCAST"
+  },
+  "CLI_codebase": {
+    "url": "https://github.com/mohamedazizabbes/CLI_codebase",
+    "qdrant_name": "CLI_codebase"
+  },
+  "RobotHealth": {
+    "url": "https://github.com/mohamedazizabbes/RobotHealth",
+    "qdrant_name": "RobotHealth"
+  },
+  "TeleWatch": {
+    "url": "https://github.com/anascherif/TeleWatch",
+    "qdrant_name": "TeleWatch"
+  },
+  "Line-Follower-Robot": {
+    "url": "https://github.com/Ahmedd-Ben-Salah/Line-Follower-Robot",
+    "qdrant_name": "Line-Follower-Robot"
+  },
+  "project_titanic": {
+    "url": "https://github.com/mohamedazizabbes/project_titanic",
+    "qdrant_name": "project_titanic"
   }
 }
