@@ -69,7 +69,7 @@ async def oauth_callback(code: str):
     async with httpx.AsyncClient(timeout=15) as client:
         resp = await client.post(
             "https://api.linear.app/oauth/token",
-            json={
+            data={
                 "client_id": LINEAR_CLIENT_ID,
                 "client_secret": LINEAR_CLIENT_SECRET,
                 "code": code,
