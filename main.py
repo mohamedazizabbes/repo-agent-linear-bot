@@ -19,7 +19,7 @@ log = logging.getLogger(__name__)
 LINEAR_WEBHOOK_SECRET = os.environ.get("LINEAR_WEBHOOK_SECRET", "")
 LINEAR_CLIENT_ID = os.environ.get("LINEAR_CLIENT_ID", "")
 LINEAR_CLIENT_SECRET = os.environ.get("LINEAR_CLIENT_SECRET", "")
-LINEAR_REDIRECT_URI = os.environ.get("LINEAR_REDIRECT_URI", "")
+LINEAR_REDIRECT_URI = os.environ.get("LINEAR_REDIRECT_URI", "https://repo-agent-linear-bot.onrender.com/callback")
 
 # App-actor token — set after completing OAuth install once
 APP_ACCESS_TOKEN = os.environ.get("LINEAR_APP_ACCESS_TOKEN", "")
