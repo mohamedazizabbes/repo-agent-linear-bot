@@ -5,6 +5,8 @@ import hmac
 import logging
 import os
 import re
+import time
+from collections import OrderedDict
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -55,6 +57,24 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Repo Agent Linear Bot", lifespan=lifespan)
+
+# Dedup cache: Linear sends both Comment and AgentSessionEvent for the same message.
+# Track recently processed (issue_id + text hash) to avoid double-processing.
+_seen_events: OrderedDict[str, float] = {}
+_SEEN_TTL = 120  # seconds
+
+
+def _is_duplicate(issue_id: str | None, text: str) -> bool:
+    key = hashlib.sha256(f"{issue_id}:{text}".encode()).hexdigest()[:16]
+    now = time.time()
+    # Evict expired entries
+    while _seen_events and next(iter(_seen_events.values())) < now - _SEEN_TTL:
+        _seen_events.popitem(last=False)
+    if key in _seen_events:
+        log.info("Duplicate event skipped — key=%s", key)
+        return True
+    _seen_events[key] = now
+    return False
 
 
 @app.get("/health")
@@ -131,6 +151,9 @@ async def webhook(req: Request):
 
 
 async def _handle_comment(text: str, issue_id: str | None, payload: dict):
+    if _is_duplicate(issue_id, text):
+        return {"ok": True}
+
     if "@repoagent" not in text.lower():
         return {"ok": True}
 
