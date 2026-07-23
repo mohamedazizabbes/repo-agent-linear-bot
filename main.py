@@ -48,6 +48,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Repo Agent Linear Bot", lifespan=lifespan)
 
+_processed_ids: set[str] = set()
+
 
 @app.get("/health")
 def health() -> dict[str, str]:
@@ -68,6 +70,11 @@ async def webhook(req: Request):
     payload = await req.json()
     if payload.get("type") != "Comment" or payload.get("action") != "create":
         return {"ok": True}
+
+    comment_id = payload.get("data", {}).get("id")
+    if comment_id in _processed_ids:
+        return {"ok": True}
+    _processed_ids.add(comment_id)
 
     text = payload["data"]["body"].strip()
     issue_id = payload["data"]["issueId"]
