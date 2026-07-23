@@ -4,9 +4,15 @@ services:
     plan: free
     dockerfilePath: Dockerfile
     envVars:
-      - key: LINEAR_API_KEY
+      - key: LINEAR_CLIENT_ID
+        sync: false
+      - key: LINEAR_CLIENT_SECRET
         sync: false
       - key: LINEAR_WEBHOOK_SECRET
+        sync: false
+      - key: LINEAR_APP_ACCESS_TOKEN
+        sync: false
+      - key: LINEAR_REFRESH_TOKEN
         sync: false
       - key: RAG_BACKEND_URL
         sync: false

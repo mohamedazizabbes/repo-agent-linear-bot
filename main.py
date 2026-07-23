@@ -74,15 +74,10 @@ async def _refresh_tokens() -> str:
 
 def _load_token() -> str:
     """Load token. Returns raw value, caller adds Bearer prefix."""
-    # OAuth access token (preferred — auto-refreshable)
+    # OAuth access token (auto-refreshable)
     env_token = os.environ.get("LINEAR_APP_ACCESS_TOKEN", "")
     if env_token:
         return env_token
-
-    # Personal API key (fallback — never expires but can't refresh)
-    api_key = os.environ.get("LINEAR_API_KEY", "")
-    if api_key:
-        return api_key
 
     # Cached token from refresh
     return _access_token
@@ -116,7 +111,7 @@ async def lifespan(app: FastAPI):
         else:
             log.error("Startup token refresh failed — will try again on 401")
     else:
-        log.info("No LINEAR_REFRESH_TOKEN — using LINEAR_API_KEY or static token")
+        log.info("No LINEAR_REFRESH_TOKEN — using static token (may expire)")
 
     yield
 
