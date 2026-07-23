@@ -5,8 +5,6 @@ import hmac
 import logging
 import os
 import re
-import time
-from collections import OrderedDict
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -23,15 +21,18 @@ LINEAR_CLIENT_ID = os.environ.get("LINEAR_CLIENT_ID", "")
 LINEAR_CLIENT_SECRET = os.environ.get("LINEAR_CLIENT_SECRET", "")
 LINEAR_REDIRECT_URI = os.environ.get("LINEAR_REDIRECT_URI", "https://repo-agent-linear-bot.onrender.com/callback")
 
-# App-actor token — set after completing OAuth install once
-APP_ACCESS_TOKEN = os.environ.get("LINEAR_APP_ACCESS_TOKEN", "")
-
-# Fallback personal key (only used if no app token)
-FALLBACK_API_KEY = os.environ.get("LINEAR_API_KEY", "")
-
 
 def _load_token() -> str:
-    return APP_ACCESS_TOKEN or FALLBACK_API_KEY
+    """Re-read token from env on every call so updates take effect without redeploy."""
+    app_token = os.environ.get("LINEAR_APP_ACCESS_TOKEN", "")
+    api_key = os.environ.get("LINEAR_API_KEY", "")
+    raw = app_token or api_key
+    if not raw:
+        return ""
+    # Ensure Bearer prefix for GraphQL calls
+    if not raw.startswith("Bearer "):
+        raw = f"Bearer {raw}"
+    return raw
 
 
 if not LINEAR_CLIENT_ID:
@@ -57,24 +58,6 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Repo Agent Linear Bot", lifespan=lifespan)
-
-# Dedup cache: Linear sends both Comment and AgentSessionEvent for the same message.
-# Track recently processed (issue_id + text hash) to avoid double-processing.
-_seen_events: OrderedDict[str, float] = {}
-_SEEN_TTL = 120  # seconds
-
-
-def _is_duplicate(issue_id: str | None, text: str) -> bool:
-    key = hashlib.sha256(f"{issue_id}:{text}".encode()).hexdigest()[:16]
-    now = time.time()
-    # Evict expired entries
-    while _seen_events and next(iter(_seen_events.values())) < now - _SEEN_TTL:
-        _seen_events.popitem(last=False)
-    if key in _seen_events:
-        log.info("Duplicate event skipped — key=%s", key)
-        return True
-    _seen_events[key] = now
-    return False
 
 
 @app.get("/health")
@@ -126,34 +109,21 @@ async def webhook(req: Request):
 
     payload = await req.json()
     event_type = payload.get("type")
-    log.info("Payload type=%s action=%s", event_type, payload.get("action"))
+    action = payload.get("action")
+    log.info("Payload type=%s action=%s", event_type, action)
 
-    # --- Agent session event (proper agent app) ---
-    if event_type == "AgentSessionEvent":
+    if event_type == "AgentSessionEvent" and action == "created":
         session = payload.get("agentSession", {})
         comment = session.get("comment", {})
         text = comment.get("body", "")
         issue_id = session.get("issueId")
         log.info("AgentSessionEvent — body=%s issueId=%s", text[:200], issue_id)
-
-        return await _handle_comment(text, issue_id, payload)
-
-    # --- Fallback: plain Comment event (webhook-only mode) ---
-    if payload.get("action") == "create" and event_type == "Comment":
-        comment = payload.get("data", {})
-        text = comment.get("body", "")
-        issue_id = comment.get("issueId")
-        log.info("Comment event — body=%s issueId=%s", text[:200], issue_id)
-
         return await _handle_comment(text, issue_id, payload)
 
     return {"ok": True}
 
 
 async def _handle_comment(text: str, issue_id: str | None, payload: dict):
-    if _is_duplicate(issue_id, text):
-        return {"ok": True}
-
     if "@repoagent" not in text.lower():
         return {"ok": True}
 
@@ -189,6 +159,9 @@ async def _handle_comment(text: str, issue_id: str | None, payload: dict):
 
 async def post_comment(issue_id: str, body: str):
     token = _load_token()
+    if not token:
+        log.error("No Linear token available — cannot post comment")
+        return
     async with httpx.AsyncClient(timeout=15) as client:
         resp = await client.post(
             "https://api.linear.app/graphql",
@@ -204,10 +177,10 @@ async def post_comment(issue_id: str, body: str):
                 "variables": {"issueId": issue_id, "body": body},
             },
         )
-        if resp.status_code != 200:
-            log.error(
-                "Linear comment failed: %s %s", resp.status_code, resp.text[:200]
-            )
+        if resp.status_code == 401:
+            log.error("Linear 401 — token invalid or expired. Update LINEAR_API_KEY or LINEAR_APP_ACCESS_TOKEN.")
+        elif resp.status_code != 200:
+            log.error("Linear comment failed: %s %s", resp.status_code, resp.text[:200])
 
 
 if __name__ == "__main__":
