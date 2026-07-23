@@ -73,25 +73,27 @@ async def _refresh_tokens() -> str:
 
 
 def _load_token() -> str:
-    """Load token: env var first, fall back to cached refresh."""
-    global _token_loaded
-
-    # Prefer static env var (personal API key never expires)
+    """Load token. Returns raw value, caller adds Bearer prefix."""
+    # Personal API key (never expires)
     api_key = os.environ.get("LINEAR_API_KEY", "")
     if api_key:
-        return f"Bearer {api_key}" if not api_key.startswith("Bearer ") else api_key
+        return api_key
 
-    # Otherwise use cached OAuth access token
-    raw = _access_token
-    if not raw:
-        return ""
-    return f"Bearer {raw}" if not raw.startswith("Bearer ") else raw
+    # OAuth access token from env (set after /callback)
+    env_token = os.environ.get("LINEAR_APP_ACCESS_TOKEN", "")
+    if env_token:
+        return env_token
+
+    # Cached token from refresh
+    return _access_token
 
 
 if not LINEAR_CLIENT_ID:
     log.warning("LINEAR_CLIENT_ID not set")
 if not LINEAR_WEBHOOK_SECRET:
     log.warning("LINEAR_WEBHOOK_SECRET not set — signature verification skipped")
+if not _load_token():
+    log.warning("No access token available — comments will fail")
 
 from repos import lookup_repo
 from rag_client import ask_rag
@@ -235,10 +237,12 @@ async def _handle_comment(text: str, issue_id: str | None, payload: dict):
 
 
 async def post_comment(issue_id: str, body: str):
-    token = _load_token()
-    if not token:
+    raw_token = _load_token()
+    if not raw_token:
         log.error("No Linear token available — cannot post comment")
         return
+
+    auth_header = f"Bearer {raw_token}" if not raw_token.startswith("Bearer ") else raw_token
 
     async def _do_post(auth: str) -> httpx.Response | None:
         async with httpx.AsyncClient(timeout=15) as client:
@@ -258,12 +262,13 @@ async def post_comment(issue_id: str, body: str):
             )
 
     # First attempt
-    resp = await _do_post(token)
+    resp = await _do_post(auth_header)
     if resp.status_code == 401 and os.environ.get("LINEAR_REFRESH_TOKEN"):
         log.info("Token expired — attempting refresh...")
         new_token = await _refresh_tokens()
         if new_token:
-            resp = await _do_post(f"Bearer {new_token}")
+            auth_header = f"Bearer {new_token}"
+            resp = await _do_post(auth_header)
 
     if resp.status_code == 401:
         log.error(
