@@ -74,15 +74,15 @@ async def _refresh_tokens() -> str:
 
 def _load_token() -> str:
     """Load token. Returns raw value, caller adds Bearer prefix."""
-    # Personal API key (never expires)
-    api_key = os.environ.get("LINEAR_API_KEY", "")
-    if api_key:
-        return api_key
-
-    # OAuth access token from env (set after /callback)
+    # OAuth access token (preferred — auto-refreshable)
     env_token = os.environ.get("LINEAR_APP_ACCESS_TOKEN", "")
     if env_token:
         return env_token
+
+    # Personal API key (fallback — never expires but can't refresh)
+    api_key = os.environ.get("LINEAR_API_KEY", "")
+    if api_key:
+        return api_key
 
     # Cached token from refresh
     return _access_token
