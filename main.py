@@ -21,26 +21,77 @@ LINEAR_CLIENT_ID = os.environ.get("LINEAR_CLIENT_ID", "")
 LINEAR_CLIENT_SECRET = os.environ.get("LINEAR_CLIENT_SECRET", "")
 LINEAR_REDIRECT_URI = os.environ.get("LINEAR_REDIRECT_URI", "https://repo-agent-linear-bot.onrender.com/callback")
 
+# Cached tokens (refreshed on startup and on 401)
+_access_token: str = ""
+_refresh_token: str = ""
+_token_loaded = False
+
+
+async def _refresh_tokens() -> str:
+    """Exchange refresh_token for a fresh access_token (and new refresh_token)."""
+    global _access_token, _refresh_token
+
+    refresh = os.environ.get("LINEAR_REFRESH_TOKEN", "")
+    if not refresh:
+        log.error("LINEAR_REFRESH_TOKEN not set — cannot refresh. Do OAuth once to get it.")
+        return ""
+
+    if not LINEAR_CLIENT_ID or not LINEAR_CLIENT_SECRET:
+        log.error("LINEAR_CLIENT_ID and LINEAR_CLIENT_SECRET required for token refresh.")
+        return ""
+
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await client.post(
+            "https://api.linear.app/oauth/token",
+            data={
+                "client_id": LINEAR_CLIENT_ID,
+                "client_secret": LINEAR_CLIENT_SECRET,
+                "refresh_token": refresh,
+                "grant_type": "refresh_token",
+            },
+        )
+        data = resp.json()
+        if resp.status_code != 200:
+            log.error("Token refresh failed: %s", data)
+            return ""
+
+        _access_token = data.get("access_token", "")
+        _refresh_token = data.get("refresh_token", refresh)  # Linear rotates refresh tokens
+        log.info(
+            "Token refreshed — access_token=%s… refresh_token=%s…",
+            _access_token[:8] if _access_token else "NONE",
+            _refresh_token[:8] if _refresh_token else "NONE",
+        )
+
+        if _refresh_token != refresh:
+            log.warning(
+                "Refresh token rotated. Update LINEAR_REFRESH_TOKEN on Render to: %s",
+                _refresh_token,
+            )
+
+        return _access_token
+
 
 def _load_token() -> str:
-    """Re-read token from env on every call so updates take effect without redeploy."""
-    app_token = os.environ.get("LINEAR_APP_ACCESS_TOKEN", "")
+    """Load token: env var first, fall back to cached refresh."""
+    global _token_loaded
+
+    # Prefer static env var (personal API key never expires)
     api_key = os.environ.get("LINEAR_API_KEY", "")
-    raw = app_token or api_key
+    if api_key:
+        return f"Bearer {api_key}" if not api_key.startswith("Bearer ") else api_key
+
+    # Otherwise use cached OAuth access token
+    raw = _access_token
     if not raw:
         return ""
-    # Ensure Bearer prefix for GraphQL calls
-    if not raw.startswith("Bearer "):
-        raw = f"Bearer {raw}"
-    return raw
+    return f"Bearer {raw}" if not raw.startswith("Bearer ") else raw
 
 
 if not LINEAR_CLIENT_ID:
     log.warning("LINEAR_CLIENT_ID not set")
 if not LINEAR_WEBHOOK_SECRET:
     log.warning("LINEAR_WEBHOOK_SECRET not set — signature verification skipped")
-if not _load_token():
-    log.warning("No access token available — comments will fail")
 
 from repos import lookup_repo
 from rag_client import ask_rag
@@ -54,6 +105,17 @@ async def lifespan(app: FastAPI):
     if not root.handlers:
         root.addHandler(logging.StreamHandler())
     log.info("Linear bot starting up...")
+
+    # Refresh token on every startup
+    if os.environ.get("LINEAR_REFRESH_TOKEN"):
+        tok = await _refresh_tokens()
+        if tok:
+            log.info("Token refreshed on startup")
+        else:
+            log.error("Startup token refresh failed — will try again on 401")
+    else:
+        log.info("No LINEAR_REFRESH_TOKEN — using LINEAR_API_KEY or static token")
+
     yield
 
 
@@ -81,12 +143,27 @@ async def oauth_callback(code: str):
             },
         )
         data = resp.json()
-        log.info("OAuth token exchange — status=%d body=%s", resp.status_code, data)
+        log.info("OAuth token exchange — status=%d", resp.status_code)
         if resp.status_code != 200:
             return {"ok": False, "error": data}
+
     token = data.get("access_token", "")
-    log.info("OAuth token received — copy this into LINEAR_APP_ACCESS_TOKEN: %s", token[:16] if token else "EMPTY")
-    return {"ok": True, "access_token": token, "instruction": "Copy this access_token into LINEAR_APP_ACCESS_TOKEN env var on Render, then redeploy."}
+    refresh = data.get("refresh_token", "")
+    log.info(
+        "Token received — access_token=%s… refresh_token=%s…",
+        token[:16] if token else "EMPTY",
+        refresh[:16] if refresh else "EMPTY",
+    )
+    return {
+        "ok": True,
+        "access_token": token,
+        "refresh_token": refresh,
+        "instruction": (
+            f"1. Copy access_token into LINEAR_APP_ACCESS_TOKEN on Render\n"
+            f"2. Copy refresh_token into LINEAR_REFRESH_TOKEN on Render\n"
+            f"3. Redeploy"
+        ),
+    }
 
 
 @app.get("/linear/webhook")
@@ -162,25 +239,39 @@ async def post_comment(issue_id: str, body: str):
     if not token:
         log.error("No Linear token available — cannot post comment")
         return
-    async with httpx.AsyncClient(timeout=15) as client:
-        resp = await client.post(
-            "https://api.linear.app/graphql",
-            headers={"Authorization": token},
-            json={
-                "query": """
-                    mutation($issueId: String!, $body: String!) {
-                        commentCreate(
-                            input: { issueId: $issueId, body: $body }
-                        ) { success }
-                    }
-                """,
-                "variables": {"issueId": issue_id, "body": body},
-            },
+
+    async def _do_post(auth: str) -> httpx.Response | None:
+        async with httpx.AsyncClient(timeout=15) as client:
+            return await client.post(
+                "https://api.linear.app/graphql",
+                headers={"Authorization": auth},
+                json={
+                    "query": """
+                        mutation($issueId: String!, $body: String!) {
+                            commentCreate(
+                                input: { issueId: $issueId, body: $body }
+                            ) { success }
+                        }
+                    """,
+                    "variables": {"issueId": issue_id, "body": body},
+                },
+            )
+
+    # First attempt
+    resp = await _do_post(token)
+    if resp.status_code == 401 and os.environ.get("LINEAR_REFRESH_TOKEN"):
+        log.info("Token expired — attempting refresh...")
+        new_token = await _refresh_tokens()
+        if new_token:
+            resp = await _do_post(f"Bearer {new_token}")
+
+    if resp.status_code == 401:
+        log.error(
+            "Linear 401 — token expired and refresh failed. "
+            "Re-run OAuth at /callback then update LINEAR_REFRESH_TOKEN on Render."
         )
-        if resp.status_code == 401:
-            log.error("Linear 401 — token invalid or expired. Update LINEAR_API_KEY or LINEAR_APP_ACCESS_TOKEN.")
-        elif resp.status_code != 200:
-            log.error("Linear comment failed: %s %s", resp.status_code, resp.text[:200])
+    elif resp.status_code != 200:
+        log.error("Linear comment failed: %s %s", resp.status_code, resp.text[:200])
 
 
 if __name__ == "__main__":
