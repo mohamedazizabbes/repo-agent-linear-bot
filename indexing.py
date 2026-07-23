@@ -37,10 +37,15 @@ async def ensure_indexed(
 
     # Trigger ingestion
     try:
+        payload: dict = {"repo_url": repo_url}
+        github_token = os.getenv("GITHUB_TOKEN", "")
+        if github_token:
+            payload["github_token"] = github_token
+
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.post(
                 f"{RAG_BACKEND_URL}/ingest",
-                json={"repo_url": repo_url},
+                json=payload,
             )
             resp.raise_for_status()
             data = resp.json()

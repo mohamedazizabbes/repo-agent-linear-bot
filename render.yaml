@@ -16,5 +16,7 @@ services:
         sync: false
       - key: RAG_BACKEND_URL
         sync: false
+      - key: GITHUB_TOKEN
+        sync: false
       - key: REPOS_JSON
         sync: false
