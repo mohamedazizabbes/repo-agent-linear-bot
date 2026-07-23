@@ -48,3 +48,8 @@ def lookup_repo(alias: str) -> dict | None:
 def list_repos() -> dict[str, dict]:
     """Return all configured repos."""
     return _load()
+
+
+def load_all_aliases() -> list[str]:
+    """Return all configured repo aliases."""
+    return list(_load().keys())
